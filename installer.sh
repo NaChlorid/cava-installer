@@ -37,14 +37,7 @@ echo "restore it later."
 
 echo " "
 echo " "
-echo "Please read the message above, if you want to continue,"
-echo "enter 'CONTINUE' in caps."
-read confirm
-
-if [[ $confirm != "CONTINUE" ]]; then
-	echo "Aborted."
-	exit
-fi
+gum confirm "THIS WILL WIPE YOUR DISK. Continue?" || exit 1
 
 #
 # Stage 2/3
@@ -53,10 +46,8 @@ fi
 show_logo
 
 echo " "
-echo "Please select your drive, heres an LSBLK of all available drives."
-lsblk -d -o NAME,SIZE,MODEL
-
-read -p "Enter your drive's location (/dev/*)" drive
+echo "Please select your drive."
+drive=$(lsblk -dn -o NAME,SIZE,MODEL | gum choose | awk '{print "/dev/"$1}')
 
 #
 # Stage 3/3
@@ -66,7 +57,7 @@ show_logo
 echo " "
 
 echo "If you want to add any applications, please include them here and seperate them by space"
-read -p "Additional packages: " packages
+packages=$(gum input --placeholder "extra packages (space separated)")
 
 #
 # Stage 4/3
@@ -75,7 +66,7 @@ show_logo
 echo " "
 
 echo "Please enter your username"
-read -p "Username: " username
+packages=$(gum input --placeholder "CavaLinux")
 
 #
 # Stage 5/3
@@ -85,7 +76,7 @@ show_logo
 echo " "
 
 echo "Please enter your password"
-read -s -p "Password(Will not be displayed): " password
+password=$(gum input --password --prompt "Password: ")
 
 #
 # Stage 6/3
@@ -94,7 +85,7 @@ read -s -p "Password(Will not be displayed): " password
 show_logo
 echo " "
 echo "Please enter your timezone in UNIX format"
-read -p "Timezone(example: Europe/Berlin): " timezone
+timezone=$(timedatectl list-timezones | gum choose)
 
 #
 # Stage 7/3
@@ -102,7 +93,7 @@ read -p "Timezone(example: Europe/Berlin): " timezone
 show_logo
 echo " "
 echo "Please enter your keyboard layout"
-read -p "Layout(example: de): " layout
+layout=$(localectl list-x11-keymap-layouts | gum choose)
 
 #
 # INSTALLATION
@@ -114,16 +105,16 @@ echo "The installation will begin shortly..."
 
 # Make partitions
 
-umount ${drive}*
-sudo parted -s $drive mklabel gpt
-sudo parted -s -a optimal $drive mkpart primary fat32 1MiB 101MiB
-sudo parted -s -a optimal $drive mkpart primary linux-swap 101MiB 4193MiB
-sudo parted -s -a optimal $drive mkpart primary ext4 4193MiB 100%
+gum spin --title "Partitioning disk..." -- umount ${drive}* &&
+	sudo parted -s $drive mklabel gpt &&
+	sudo parted -s -a optimal $drive mkpart primary fat32 1MiB 101MiB &&
+	sudo parted -s -a optimal $drive mkpart primary linux-swap 101MiB 4193MiB &&
+	sudo parted -s -a optimal $drive mkpart primary ext4 4193MiB 100%
 
 # Format 'em
-yes | sudo mkfs.vfat -F32 ${drive}1
-yes | sudo mkswap ${drive}2
-yes | sudo mkfs.ext4 ${drive}3
+gum spin --title "Format the partitions" -- sudo mkfs.vfat -F32 ${drive}1 &&
+	sudo mkswap ${drive}2 &&
+	sudo mkfs.ext4 ${drive}3
 
 # Mount stuff
 mount ${drive}3 /mnt
@@ -131,13 +122,12 @@ mount --mkdir ${drive}1 /mnt/boot/efi
 swapon ${drive}2
 
 # Install the packages :p
-yes "" | pacstrap /mnt base linux-zen linux-firmware sof-firmware base-devel grub efibootmgr nano networkmanager xdg-desktop-portal-gnome curl git niri fuzzel alacritty pipewire pipewire-pulse playerctl
+gum spin --title "Installing the base system..." -- pacstrap /mnt base linux-zen linux-firmware sof-firmware base-devel grub efibootmgr nano networkmanager xdg-desktop-portal-gnome curl git niri fuzzel alacritty
 
 # Generate fstab
 genfstab /mnt > /mnt/etc/fstab
 
-# chroot into the system.
-arch-chroot /mnt /bin/bash <<EOF
+cat > /mnt/root/chroot-install.sh <<EOF
 echo "Entered chroot"
 ln -sf /usr/share/zoneinfo/${timezone} /etc/localtime
 hwclock --systohc
@@ -157,7 +147,7 @@ su - aurbuilder -c '
 	git clone https://aur.archlinux.org/paru
 	cd paru
 	makepkg -si --noconfirm
-	yes "" | paru -S noctalia-qs-git brightnessctl ddcutil imagemagick cliphist wlsunset xdg-desktop-portal python3 evolution-data-server qt6-multimedia-ffmpeg ly --skipreview
+	yes | paru -S noctalia-qs brightnessctl ddcutil imagemagick cliphist wlsunset xdg-desktop-portal python3 evolution-data-server qt6-multimedia-ffmpeg ly --skipreview
 '
 
 userdel -r aurbuilder
@@ -167,7 +157,7 @@ rm /etc/sudoers.d/aurbuilder
 rm /etc/os-release
 cat > /etc/os-release <<OSREL
 NAME="Cava"
-PRETTY_NAME="Cava Linux"
+PRETTY_NAME="Cava GNU/Linux(arch-based)"
 ID=cava
 BUILD_ID=rolling
 ANSI_COLOR="38;2;150;111;51"
@@ -176,11 +166,7 @@ DOCUMENTATION_URL="https://wiki.chlorid.org/
 LOGO=archlinux-logo
 OSREL
 
-su - ${username} -c '
-	cd ~
-	mkdir -p .config/quickshell/noctalia-shell
-	curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell
-'
+mkdir -p /home/${username}/.config/quickshell/noctalia-shell && curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz | tar -xz --strip-components=1 -C /home/${username}/.config/quickshell/noctalia-shell
 
 mkdir -p /home/${username}/.config/niri/
 cat > /home/${username}/.config/niri/config.kdl <<NIRI_CONFIG
@@ -813,10 +799,13 @@ systemctl enable NetworkManager
 systemctl enable ly@tty1
 grub-install ${drive} --bootloader-id="Cava GNU/Linux"
 grub-mkconfig -o /boot/grub/grub.cfg
+rm -rf /root/chroot-install.sh
 EOF
 
+gum spin --title "Configuring system..." -- arch-chroot /mnt /bin/bash /root/chroot-install.sh
+
 umount -a
-show_logo
+# show_logo
 echo " "
 echo "Installation finished. restarting in 5s..."
 sleep 5
